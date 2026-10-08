@@ -78,6 +78,7 @@ class BookingSerializer(serializers.ModelSerializer):
     service = serializers.SerializerMethodField()
     vehicle = VehicleSnapshotSerializer(source='*', read_only=True)
     technician = PersonSerializer(read_only=True)
+    requested_technician = PersonSerializer(read_only=True)
     payment = serializers.SerializerMethodField()
     duration = serializers.SerializerMethodField()
     can_cancel = serializers.SerializerMethodField()
@@ -91,8 +92,8 @@ class BookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = [
             'id', 'reference', 'status', 'service', 'plan_tag', 'price', 'duration', 'vehicle',
-            'scheduled_at', 'address', 'latitude', 'longitude', 'notes', 'technician', 'payment',
-            'can_cancel', 'can_reschedule', 'can_review', 'review', 'before_photos', 'after_photos',
+            'scheduled_at', 'address', 'latitude', 'longitude', 'notes', 'technician', 'requested_technician',
+            'payment', 'can_cancel', 'can_reschedule', 'can_review', 'review', 'before_photos', 'after_photos',
             'created_at', 'paid_at', 'completed_at', 'cancelled_at',
         ]
         read_only_fields = fields
@@ -142,6 +143,12 @@ class BookingCreateSerializer(serializers.Serializer):
     latitude = serializers.DecimalField(max_digits=9, decimal_places=6, min_value=Decimal('-90'), max_value=Decimal('90'))
     longitude = serializers.DecimalField(max_digits=9, decimal_places=6, min_value=Decimal('-180'), max_value=Decimal('180'))
     notes = serializers.CharField(max_length=300, required=False, allow_blank=True, default='')
+    technician = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(role=User.Role.TECHNICIAN, is_active=True),
+        required=False,
+        allow_null=True,
+        help_text='Book with this technician (see GET /technicians/). Leave out to let us assign one.',
+    )
 
     def validate_address(self, value):
         value = value.strip()
@@ -189,6 +196,34 @@ class CardSerializer(serializers.ModelSerializer):
         if year and month and year * 12 + month < now.year * 12 + now.month:
             raise serializers.ValidationError({'exp_year': 'This card has expired.'})
         return attrs
+
+
+class TechnicianCardSerializer(serializers.ModelSerializer):
+    """A technician as the customer sees them when choosing who to book."""
+
+    employee_code = serializers.CharField(source='technician_profile.employee_code', read_only=True)
+    specialty = serializers.CharField(source='technician_profile.specialty', read_only=True)
+    experience = serializers.CharField(source='technician_profile.experience', read_only=True)
+    rating = serializers.SerializerMethodField()
+    rating_count = serializers.IntegerField(source='technician_profile.rating_count', read_only=True)
+    jobs_completed = serializers.IntegerField(source='technician_profile.jobs_completed', read_only=True)
+    is_free = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'full_name', 'photo', 'bio', 'city', 'employee_code', 'specialty', 'experience',
+            'rating', 'rating_count', 'jobs_completed', 'is_free',
+        ]
+        read_only_fields = fields
+
+    def get_rating(self, obj) -> float | None:
+        profile = obj.technician_profile
+        return float(profile.rating) if profile.rating_count else None
+
+    def get_is_free(self, obj) -> bool | None:
+        """Free at the time asked about with `?scheduled_at=`; null when no time was given."""
+        return self.context.get('free_ids', {}).get(obj.pk)
 
 
 # ---------------------------------------------------------------- technician view

@@ -38,6 +38,7 @@ if not SECRET_KEY:
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS')
 
 INSTALLED_APPS = [
+    'daphne',  # serves WebSockets as well as HTTP, also under `manage.py runserver`
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_spectacular',
+    'channels',
     # project
     'users',
     'vehicles',
@@ -107,11 +109,15 @@ DATABASES = {
 
 AUTH_USER_MODEL = 'users.User'
 
+ASGI_APPLICATION = 'config.asgi.application'
+
+# Live chat messages are passed between connections in memory: fine for one server process.
+# For several processes use channels_redis here instead.
+CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}
+
+# Only a minimum length: no "too common", "too similar" or "all numbers" rules.
 AUTH_PASSWORD_VALIDATORS = [
-    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
-    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
-    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
-    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 6}},
 ]
 
 if 'test' in sys.argv:

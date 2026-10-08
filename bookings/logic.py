@@ -58,7 +58,9 @@ def _hours_until(booking: Booking) -> float:
 # ------------------------------------------------------------------ customer side
 
 @transaction.atomic
-def create_booking(customer: User, *, vehicle, plan, scheduled_at, address, latitude, longitude, notes='') -> Booking:
+def create_booking(
+    customer: User, *, vehicle, plan, scheduled_at, address, latitude, longitude, notes='', technician=None
+) -> Booking:
     if vehicle.owner_id != customer.pk:
         raise ValidationError({'vehicle': 'This vehicle is not yours.'})
     if not plan.is_active or not plan.service.is_active:
@@ -69,9 +71,17 @@ def create_booking(customer: User, *, vehicle, plan, scheduled_at, address, lati
     if scheduled_at > now + timedelta(days=MAX_DAYS_AHEAD):
         raise ValidationError({'scheduled_at': f'You can book up to {MAX_DAYS_AHEAD} days ahead.'})
 
+    if technician is not None:
+        profile = getattr(technician, 'technician_profile', None)
+        if technician.role != User.Role.TECHNICIAN or not technician.is_active or profile is None:
+            raise ValidationError({'technician': 'Choose a technician from the list.'})
+        if not profile.is_available:
+            raise ValidationError({'technician': f'{technician.full_name} is not taking jobs right now.'})
+
     service = plan.service
     booking = Booking.objects.create(
         customer=customer,
+        requested_technician=technician,
         vehicle=vehicle,
         service=service,
         plan=plan,
@@ -89,6 +99,8 @@ def create_booking(customer: User, *, vehicle, plan, scheduled_at, address, lati
         longitude=longitude,
         notes=notes,
     )
+    if technician is not None and not _is_free(technician, booking):
+        raise ValidationError({'technician': f'{technician.full_name} is busy at that time. Pick another time or technician.'})
     for i, step in enumerate(service.checklist.all()):
         JobChecklistItem.objects.create(booking=booking, text=step.text, sort_order=i)
     return booking
@@ -115,7 +127,16 @@ def pay_booking(booking: Booking, card: SavedCard) -> Booking:
            f'Your {booking.service_name} is booked for {_when(booking)}.', booking)
     notify(booking.customer, Notification.Type.PAYMENT, 'Payment received',
            f'We received your payment of ${booking.price} on {result.method_label}.', booking)
-    assign_technician(booking)
+    if booking.requested_technician_id:
+        # The customer picked someone: that technician decides whether to accept. They can chat meanwhile.
+        Conversation.objects.get_or_create(
+            customer=booking.customer, counterpart=booking.requested_technician, booking=booking,
+            defaults={'kind': Conversation.Kind.BOOKING},
+        )
+        notify(booking.requested_technician, Notification.Type.JOB, 'New job request',
+               f'{booking.customer.full_name} asked for you: {booking.service_name} on {_when(booking)}.', booking)
+    else:
+        assign_technician(booking)
     booking.refresh_from_db()
     return booking
 
@@ -226,6 +247,11 @@ def tracking(booking: Booking) -> dict:
 
 # ------------------------------------------------------------------ dispatch
 
+def is_free(technician: User, booking: Booking) -> bool:
+    """Public name for the free-at-this-time check (also works on a booking that isn't saved)."""
+    return _is_free(technician, booking)
+
+
 def _is_free(technician: User, booking: Booking, ignore: Booking | None = None) -> bool:
     """True if the technician has no other job overlapping this booking (plus a travel buffer)."""
     buffer = timedelta(minutes=settings.JOB_BUFFER_MINUTES)
@@ -244,7 +270,7 @@ def _is_free(technician: User, booking: Booking, ignore: Booking | None = None) 
 def assign_technician(booking: Booking) -> User | None:
     """Give the booking to the best free, available technician (highest rating, then fewest jobs)."""
     booking = Booking.objects.select_for_update().get(pk=booking.pk)
-    if booking.status != S.CONFIRMED or booking.technician_id:
+    if booking.status != S.CONFIRMED or booking.technician_id or booking.requested_technician_id:
         return None
 
     candidates = (
@@ -265,6 +291,8 @@ def claim_booking(technician: User, booking: Booking) -> Booking:
     booking = Booking.objects.select_for_update().get(pk=booking.pk)
     if booking.status != S.CONFIRMED or booking.technician_id:
         raise StateError('This job has already been taken.')
+    if booking.requested_technician_id and booking.requested_technician_id != technician.pk:
+        raise StateError('This job was requested for another technician.')
     if not technician.technician_profile.is_available:
         raise StateError('Switch on "Available for Jobs" to accept jobs.')
     if not _is_free(technician, booking):

@@ -1,8 +1,9 @@
 from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.decorators import action
@@ -11,11 +12,14 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from services.models import ServicePlan
+from users.models import User
 from users.permissions import IsCustomer, IsTechnician
 
 from . import logic
 from .models import Booking, Earning, SavedCard
 from .serializers import (
+    TechnicianCardSerializer,
     BookingCreateSerializer,
     BookingSerializer,
     CancelSerializer,
@@ -144,6 +148,45 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         return Response(logic.tracking(self.get_object()))
 
 
+@extend_schema(
+    tags=['Bookings'],
+    parameters=[
+        OpenApiParameter('scheduled_at', str, description='ISO time of the booking: each technician then says whether they are free.'),
+        OpenApiParameter('plan', int, description='The plan being booked, so its length is taken into account.'),
+    ],
+    responses=TechnicianCardSerializer(many=True),
+)
+class TechnicianListView(generics.ListAPIView):
+    """Technicians a customer can book with directly, best rated first."""
+
+    permission_classes = [IsCustomer]
+    serializer_class = TechnicianCardSerializer
+
+    def get_queryset(self):
+        return (
+            User.objects.filter(role=User.Role.TECHNICIAN, is_active=True, technician_profile__is_available=True)
+            .select_related('technician_profile')
+            .order_by('-technician_profile__rating', '-technician_profile__jobs_completed', 'id')
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        raw = self.request.query_params.get('scheduled_at')
+        when = parse_datetime(raw.replace(' ', '+')) if raw else None
+        if when is not None:
+            if timezone.is_naive(when):
+                when = timezone.make_aware(when)
+            minutes = 120
+            plan_id = self.request.query_params.get('plan')
+            if plan_id and plan_id.isdigit():
+                plan = ServicePlan.objects.filter(pk=plan_id).first()
+                if plan:
+                    minutes = plan.expected_minutes
+            probe = Booking(scheduled_at=when, duration_minutes=minutes)
+            context['free_ids'] = {t.pk: logic.is_free(t, probe) for t in self.get_queryset()}
+        return context
+
+
 @extend_schema(tags=['Payment methods'])
 class CardViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
     """Saved cards. Only the brand, last 4 digits and expiry are stored."""
@@ -258,7 +301,13 @@ class OpenJobsView(generics.ListAPIView):
     serializer_class = JobListSerializer
 
     def get_queryset(self):
-        return _booking_queryset().filter(status=S.CONFIRMED, technician__isnull=True, scheduled_at__gte=timezone.now()).order_by('scheduled_at')
+        # A booking the customer made for one technician is offered only to that technician.
+        return (
+            _booking_queryset()
+            .filter(status=S.CONFIRMED, technician__isnull=True, scheduled_at__gte=timezone.now())
+            .filter(Q(requested_technician__isnull=True) | Q(requested_technician=self.request.user))
+            .order_by('scheduled_at')
+        )
 
 
 @extend_schema(tags=['Technician jobs'], request=None, responses=JobDetailSerializer)

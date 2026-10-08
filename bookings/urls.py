@@ -9,6 +9,7 @@ router.register('cards', views.CardViewSet, basename='card')
 router.register('technician/jobs', views.JobViewSet, basename='job')
 
 urlpatterns = [
+    path('technicians/', views.TechnicianListView.as_view(), name='technician-list'),
     path('technician/dashboard/', views.DashboardView.as_view(), name='technician-dashboard'),
     path('technician/open-jobs/', views.OpenJobsView.as_view(), name='open-jobs'),
     path('technician/open-jobs/<int:pk>/accept/', views.AcceptJobView.as_view(), name='accept-job'),

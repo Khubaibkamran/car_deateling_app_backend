@@ -33,6 +33,10 @@ class Booking(models.Model):
     technician = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='jobs'
     )
+    # The technician the customer asked for. Only that technician can accept the booking.
+    requested_technician = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='requested_jobs'
+    )
     vehicle = models.ForeignKey(Vehicle, null=True, blank=True, on_delete=models.SET_NULL, related_name='bookings')
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name='bookings')
     plan = models.ForeignKey(ServicePlan, on_delete=models.PROTECT, related_name='bookings')

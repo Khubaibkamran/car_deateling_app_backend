@@ -120,7 +120,8 @@ class LoginSerializer(TokenObtainPairSerializer):
 
 class GoogleLoginSerializer(serializers.Serializer):
     id_token = serializers.CharField(write_only=True)
-    role = serializers.ChoiceField(choices=User.Role.choices, default=User.Role.CUSTOMER)
+    # Left out on the shared sign-in screen: an existing account keeps its role, a new one is a customer.
+    role = serializers.ChoiceField(choices=User.Role.choices, required=False)
 
 
 class ChangePasswordSerializer(serializers.Serializer):

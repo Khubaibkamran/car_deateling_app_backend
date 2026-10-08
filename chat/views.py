@@ -10,6 +10,7 @@ from users.models import User
 from users.permissions import IsCustomer
 
 from .models import Conversation, Message
+from .realtime import publish, save_message
 from .serializers import ConversationSerializer, MessageSerializer, SendMessageSerializer
 
 
@@ -79,8 +80,8 @@ class MessageListCreateView(generics.GenericAPIView):
         conversation = self._conversation()
         serializer = SendMessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        message = Message.objects.create(conversation=conversation, sender=request.user, text=serializer.validated_data['text'])
-        Conversation.objects.filter(pk=conversation.pk).update(last_message_at=message.created_at)
+        message = save_message(conversation.pk, request.user, serializer.validated_data['text'])
+        publish(message)  # anyone with the chat open sees it straight away
         return Response(MessageSerializer(message, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 

@@ -84,7 +84,8 @@ class GoogleLoginView(APIView):
             return Response({'detail': str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
 
         email = claims['email'].strip().lower()
-        role = serializer.validated_data['role']
+        requested_role = serializer.validated_data.get('role')
+        role = requested_role or User.Role.CUSTOMER
         created = False
         with transaction.atomic():
             user = User.objects.filter(email__iexact=email).first()
@@ -97,7 +98,7 @@ class GoogleLoginView(APIView):
                 created = True
         if not user.is_active:
             return Response({'detail': 'This account is disabled.'}, status=status.HTTP_401_UNAUTHORIZED)
-        if user.role != role:
+        if requested_role and user.role != requested_role:
             return Response(
                 {'role': f'This is a {user.get_role_display().lower()} account. Please use the {user.role} sign-in.'},
                 status=status.HTTP_400_BAD_REQUEST,
